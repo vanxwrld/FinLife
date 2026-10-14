@@ -114,7 +114,8 @@ router.get('/:grupId/balance', requireAuth, async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Balance GET Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -165,7 +166,8 @@ router.get('/:grupId/transactions', requireAuth, async (req, res) => {
 
     res.json({ success: true, data: all });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Transactions GET Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 

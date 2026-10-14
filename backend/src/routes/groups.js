@@ -22,7 +22,8 @@ router.get('/', requireAuth, async (req, res) => {
 
     res.json({ success: true, data: groups });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Groups GET Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -33,7 +34,7 @@ router.post('/', requireAuth, async (req, res) => {
     const { nama_grup } = req.body;
     const userId = req.user.id;
 
-    if (!nama_grup || nama_grup.trim() === '') {
+    if (!nama_grup || typeof nama_grup !== 'string' || nama_grup.trim() === '') {
       return res.status(400).json({ success: false, message: 'nama_grup wajib diisi' });
     }
 
@@ -44,7 +45,7 @@ router.post('/', requireAuth, async (req, res) => {
 
     const [groupResult] = await conn.query(
       'INSERT INTO `groups` (nama_grup, id_pembuat, kode_undangan) VALUES (?, ?, ?)',
-      [nama_grup.trim(), userId, kode_undangan]
+      [nama_grup.trim().substring(0, 100), userId, kode_undangan]
     );
 
     const grupId = groupResult.insertId;
@@ -63,14 +64,15 @@ router.post('/', requireAuth, async (req, res) => {
       message: 'Grup berhasil dibuat',
       data: {
         id: grupId,
-        nama_grup: nama_grup.trim(),
+        nama_grup: nama_grup.trim().substring(0, 100),
         kode_undangan,
         peran: 'admin'
       }
     });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Groups POST Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   } finally {
     conn.release();
   }
@@ -84,11 +86,11 @@ router.get('/:id', requireAuth, async (req, res) => {
 
     // Cek apakah user adalah anggota grup ini
     const [membership] = await pool.query(
-      'SELECT peran, status FROM group_members WHERE id_grup = ? AND id_user = ?',
+      'SELECT peran, status FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
       [grupId, userId]
     );
     if (membership.length === 0) {
-      return res.status(403).json({ success: false, message: 'Bukan anggota grup ini' });
+      return res.status(403).json({ success: false, message: 'Bukan anggota aktif grup ini' });
     }
 
     const [groups] = await pool.query('SELECT * FROM `groups` WHERE id = ?', [grupId]);
@@ -100,7 +102,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       `SELECT gm.id, gm.id_user, u.nama, u.username, u.email, gm.peran, gm.status, gm.tanggal_bergabung
        FROM group_members gm
        JOIN users u ON gm.id_user = u.id
-       WHERE gm.id_grup = ?
+       WHERE gm.id_grup = ? AND gm.status = 'aktif'
        ORDER BY gm.peran ASC, u.nama ASC`,
       [grupId]
     );
@@ -114,7 +116,8 @@ router.get('/:id', requireAuth, async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Groups Detail Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -124,7 +127,7 @@ router.post('/join', requireAuth, async (req, res) => {
     const { kode_undangan } = req.body;
     const userId = req.user.id;
 
-    if (!kode_undangan) {
+    if (!kode_undangan || typeof kode_undangan !== 'string') {
       return res.status(400).json({ success: false, message: 'kode_undangan wajib diisi' });
     }
 
@@ -169,7 +172,8 @@ router.post('/join', requireAuth, async (req, res) => {
       data: grup
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Groups Join Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -180,20 +184,20 @@ router.post('/:id/invite', requireAuth, async (req, res) => {
     const { username } = req.body;
     const userId = req.user.id;
 
-    if (!username) {
+    if (!username || typeof username !== 'string') {
       return res.status(400).json({ success: false, message: 'username wajib diisi' });
     }
 
-    // Cek hak akses: hanya admin yang bisa undang (atau anggota jika diizinkan)
+    // Cek hak akses: hanya admin yang bisa undang (US-02)
     const [membership] = await pool.query(
       'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
       [grupId, userId]
     );
-    if (membership.length === 0) {
-      return res.status(403).json({ success: false, message: 'Bukan anggota grup ini' });
+    if (membership.length === 0 || membership[0].peran !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Hanya admin grup yang berhak mengundang anggota' });
     }
 
-    const [targetUsers] = await pool.query('SELECT id, nama, username FROM users WHERE username = ?', [username]);
+    const [targetUsers] = await pool.query('SELECT id, nama, username FROM users WHERE username = ?', [username.trim()]);
     if (targetUsers.length === 0) {
       return res.status(404).json({ success: false, message: 'User tidak ditemukan' });
     }
@@ -220,7 +224,8 @@ router.post('/:id/invite', requireAuth, async (req, res) => {
       message: `Undangan terkirim ke ${targetUser.nama}`
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Groups Invite Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 

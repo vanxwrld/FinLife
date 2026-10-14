@@ -63,7 +63,8 @@ router.get('/:grupId/expenses', requireAuth, async (req, res) => {
 
     res.json({ success: true, data });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Expenses GET Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -84,16 +85,23 @@ router.post('/:grupId/expenses', requireAuth, async (req, res) => {
     } = req.body;
 
     const parsedNominal = parseFloat(total_nominal);
-    if (isNaN(parsedNominal) || parsedNominal <= 0) {
-      return res.status(400).json({ success: false, message: 'Total nominal harus lebih dari 0' });
+    if (isNaN(parsedNominal) || !Number.isFinite(parsedNominal) || parsedNominal <= 0 || parsedNominal > 1000000000) {
+      return res.status(400).json({ success: false, message: 'Total nominal tidak valid (harus > 0 dan realistis)' });
     }
 
-    if (!nama_pengeluaran || nama_pengeluaran.trim() === '') {
-      return res.status(400).json({ success: false, message: 'nama_pengeluaran wajib diisi' });
+    if (!nama_pengeluaran || typeof nama_pengeluaran !== 'string' || nama_pengeluaran.trim() === '') {
+      return res.status(400).json({ success: false, message: 'Nama pengeluaran wajib diisi' });
     }
 
     if (!Array.isArray(splits) || splits.length === 0) {
       return res.status(400).json({ success: false, message: 'Pilih minimal satu anggota yang terlibat' });
+    }
+
+    // Deteksi duplikasi user pada splits
+    const rawIds = splits.map(s => (s && typeof s === 'object' && s.id_user !== undefined ? s.id_user : s));
+    const uniqueIds = new Set(rawIds.map(id => Number(id)));
+    if (uniqueIds.size !== rawIds.length) {
+      return res.status(400).json({ success: false, message: 'Terdapat duplikasi anggota pada daftar pembagian' });
     }
 
     // Validasi pembagian berdasarkan metode (US-06)
@@ -102,11 +110,11 @@ router.post('/:grupId/expenses', requireAuth, async (req, res) => {
       let sumSplit = 0;
       for (const item of splits) {
         const nom = parseFloat(item.nominal_bagian);
-        if (isNaN(nom) || nom < 0) {
+        if (isNaN(nom) || !Number.isFinite(nom) || nom < 0) {
           return res.status(400).json({ success: false, message: 'Nominal bagian anggota tidak valid' });
         }
         sumSplit += nom;
-        calculatedSplits.push({ id_user: item.id_user, nominal_bagian: nom });
+        calculatedSplits.push({ id_user: Number(item.id_user), nominal_bagian: nom });
       }
 
       // Selisih pembagian harus pas dengan total_nominal (US-06 Kriteria 3)
@@ -131,13 +139,30 @@ router.post('/:grupId/expenses', requireAuth, async (req, res) => {
           totalAssigned += share;
         }
         calculatedSplits.push({
-          id_user: splits[i].id_user || splits[i],
+          id_user: Number(splits[i].id_user || splits[i]),
           nominal_bagian: share
         });
       }
     }
 
     await conn.beginTransaction();
+
+    // 1. Pessimistic Lock pada baris grup untuk konsistensi finansial ACID
+    const [groupCheck] = await conn.query('SELECT id FROM `groups` WHERE id = ? FOR UPDATE', [grupId]);
+    if (groupCheck.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: 'Grup tidak ditemukan' });
+    }
+
+    // 2. Proteksi BOLA: Pembuat request harus anggota aktif grup
+    const [callerCheck] = await conn.query(
+      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
+      [grupId, userId]
+    );
+    if (callerCheck.length === 0) {
+      await conn.rollback();
+      return res.status(403).json({ success: false, message: 'Anda bukan anggota aktif dalam grup ini' });
+    }
 
     // Idempoten untuk sinkronisasi offline (id_klien)
     if (id_klien) {
@@ -149,9 +174,9 @@ router.post('/:grupId/expenses', requireAuth, async (req, res) => {
     }
 
     const tgl = tanggal || new Date().toISOString().split('T')[0];
-    const pembayarId = id_pembayar || userId;
+    const pembayarId = id_pembayar ? Number(id_pembayar) : userId;
 
-    // ── SECURITY: Validasi pembayar adalah anggota aktif grup ─────────────────
+    // 3. Validasi pembayar adalah anggota aktif grup
     const [pembayarCheck] = await conn.query(
       'SELECT id FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
       [grupId, pembayarId]
@@ -161,23 +186,21 @@ router.post('/:grupId/expenses', requireAuth, async (req, res) => {
       return res.status(400).json({ success: false, message: 'Pembayar bukan anggota aktif grup ini' });
     }
 
-    // ── SECURITY: Validasi semua id_user dalam splits adalah anggota aktif grup ─
+    // 4. Validasi semua id_user dalam splits adalah anggota aktif grup
     const splitUserIds = calculatedSplits.map(s => s.id_user);
-    if (splitUserIds.length > 0) {
-      const [splitMemberCheck] = await conn.query(
-        'SELECT id_user FROM group_members WHERE id_grup = ? AND id_user IN (?) AND status = "aktif"',
-        [grupId, splitUserIds]
-      );
-      if (splitMemberCheck.length !== splitUserIds.length) {
-        await conn.rollback();
-        return res.status(400).json({ success: false, message: 'Satu atau lebih anggota dalam pembagian bukan anggota aktif grup ini' });
-      }
+    const [splitMemberCheck] = await conn.query(
+      'SELECT id_user FROM group_members WHERE id_grup = ? AND id_user IN (?) AND status = "aktif"',
+      [grupId, splitUserIds]
+    );
+    if (splitMemberCheck.length !== splitUserIds.length) {
+      await conn.rollback();
+      return res.status(400).json({ success: false, message: 'Satu atau lebih anggota dalam pembagian bukan anggota aktif grup ini' });
     }
 
     const [expenseResult] = await conn.query(
       `INSERT INTO expenses (id_klien, id_grup, id_pembayar, id_pencatat, nama_pengeluaran, total_nominal, metode_pembagian, tanggal, status_data)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'aktif')`,
-      [id_klien || null, grupId, pembayarId, userId, nama_pengeluaran.trim(), parsedNominal, metode_pembagian || 'bagi_rata', tgl]
+      [id_klien || null, grupId, pembayarId, userId, nama_pengeluaran.trim().substring(0, 200), parsedNominal, metode_pembagian || 'bagi_rata', tgl]
     );
 
     const expenseId = expenseResult.insertId;
@@ -208,7 +231,8 @@ router.post('/:grupId/expenses', requireAuth, async (req, res) => {
     });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Expenses POST Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   } finally {
     conn.release();
   }
@@ -223,14 +247,17 @@ router.delete('/:grupId/expenses/:id', requireAuth, async (req, res) => {
 
     await conn.beginTransaction();
 
-    const [exp] = await conn.query('SELECT * FROM expenses WHERE id = ? AND id_grup = ?', [id, grupId]);
+    // Lock baris grup
+    await conn.query('SELECT id FROM `groups` WHERE id = ? FOR UPDATE', [grupId]);
+
+    const [exp] = await conn.query('SELECT * FROM expenses WHERE id = ? AND id_grup = ? AND status_data = "aktif"', [id, grupId]);
     if (exp.length === 0) {
       await conn.rollback();
       return res.status(404).json({ success: false, message: 'Data pengeluaran tidak ditemukan' });
     }
 
     const [member] = await conn.query(
-      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ?',
+      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
       [grupId, userId]
     );
     const isAdmin = member.length > 0 && member[0].peran === 'admin';
@@ -252,7 +279,8 @@ router.delete('/:grupId/expenses/:id', requireAuth, async (req, res) => {
     res.json({ success: true, message: 'Pengeluaran berhasil dihapus dan kewajiban dihitung ulang' });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Expenses DELETE Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   } finally {
     conn.release();
   }

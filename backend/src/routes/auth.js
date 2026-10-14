@@ -2,17 +2,29 @@ import express from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import pool from '../db.js';
-import { requireAuth } from '../middleware/auth.js';
+import { requireAuth, JWT_SECRET } from '../middleware/auth.js';
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'finlife_secret_ganti_di_produksi';
+
+// Validasi email sederhana
+const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // POST /api/auth/register (US-01)
 router.post('/register', async (req, res) => {
   try {
     const { nama, username, email, password } = req.body;
-    if (!nama || !email || !password) {
-      return res.status(400).json({ success: false, message: 'nama, email, dan password wajib diisi' });
+    if (!nama || nama.trim() === '') {
+      return res.status(400).json({ success: false, message: 'Nama wajib diisi' });
+    }
+    if (!email || !emailRegex.test(email)) {
+      return res.status(400).json({ success: false, message: 'Format email tidak valid' });
+    }
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({ success: false, message: 'Password wajib diisi' });
+    }
+    const passwordLen = password.length;
+    if (passwordLen < 8 || passwordLen > 72) {
+      return res.status(400).json({ success: false, message: 'Password harus 8-72 karakter' });
     }
 
     // Cek duplikasi email atau username
@@ -29,19 +41,19 @@ router.post('/register', async (req, res) => {
 
     const [result] = await pool.query(
       'INSERT INTO users (nama, username, email, password_hash) VALUES (?, ?, ?, ?)',
-      [nama, username || null, email, password_hash]
+      [nama.trim(), username ? username.trim() : null, email.trim(), password_hash]
     );
 
     const userId = result.insertId;
-    const token = jwt.sign({ id: userId, email, nama, username }, JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ id: userId, email: email.trim(), nama: nama.trim(), username: username ? username.trim() : null }, JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({
       success: true,
       message: 'Registrasi berhasil',
-      data: { id: userId, nama, username, email, token }
+      data: { id: userId, nama: nama.trim(), username: username ? username.trim() : null, email: email.trim(), token }
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -49,11 +61,14 @@ router.post('/register', async (req, res) => {
 router.post('/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ success: false, message: 'Email dan password wajib diisi' });
+    if (!email || !emailRegex.test(email)) {
+      return res.status(400).json({ success: false, message: 'Format email tidak valid' });
+    }
+    if (!password || typeof password !== 'string') {
+      return res.status(400).json({ success: false, message: 'Password wajib diisi' });
     }
 
-    const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email]);
+    const [users] = await pool.query('SELECT * FROM users WHERE email = ?', [email.trim()]);
     if (users.length === 0) {
       return res.status(401).json({ success: false, message: 'Email atau password salah' });
     }
@@ -82,7 +97,7 @@ router.post('/login', async (req, res) => {
       }
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -98,7 +113,7 @@ router.get('/me', requireAuth, async (req, res) => {
     }
     res.json({ success: true, data: users[0] });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 

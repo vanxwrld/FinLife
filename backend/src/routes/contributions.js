@@ -58,7 +58,8 @@ router.get('/:grupId/contributions', requireAuth, async (req, res) => {
 
     res.json({ success: true, data: rows });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Contributions GET Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   }
 });
 
@@ -70,23 +71,42 @@ router.post('/:grupId/contributions', requireAuth, async (req, res) => {
     const userId = req.user.id;
     const { id_user, nominal, keterangan, tanggal, id_klien } = req.body;
 
-    const penyetorId = id_user || userId; // Default penyetor adalah diri sendiri
     const parsedNominal = parseFloat(nominal);
-
-    if (isNaN(parsedNominal) || parsedNominal <= 0) {
-      return res.status(400).json({ success: false, message: 'Nominal setoran harus lebih dari 0' });
-    }
-
-    // Pastikan user anggota grup
-    const [membership] = await conn.query(
-      'SELECT id FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
-      [grupId, penyetorId]
-    );
-    if (membership.length === 0) {
-      return res.status(400).json({ success: false, message: 'Penyetor bukan anggota aktif grup ini' });
+    if (isNaN(parsedNominal) || !Number.isFinite(parsedNominal) || parsedNominal <= 0 || parsedNominal > 1000000000) {
+      return res.status(400).json({ success: false, message: 'Nominal setoran tidak valid (harus > 0 dan realistis)' });
     }
 
     await conn.beginTransaction();
+
+    // 1. Pessimistic lock pada baris grup untuk mencegah race condition kalkulasi saldo
+    const [groupCheck] = await conn.query('SELECT id FROM `groups` WHERE id = ? FOR UPDATE', [grupId]);
+    if (groupCheck.length === 0) {
+      await conn.rollback();
+      return res.status(404).json({ success: false, message: 'Grup tidak ditemukan' });
+    }
+
+    // 2. Proteksi BOLA: Verifikasi bahwa pembuat request adalah anggota aktif grup
+    const [callerMembership] = await conn.query(
+      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
+      [grupId, userId]
+    );
+    if (callerMembership.length === 0) {
+      await conn.rollback();
+      return res.status(403).json({ success: false, message: 'Anda bukan anggota aktif dalam grup ini' });
+    }
+
+    // 3. Jika mencatat untuk user lain, pastikan target penyetor adalah anggota aktif grup
+    const penyetorId = id_user ? parseInt(id_user, 10) : userId;
+    if (penyetorId !== userId) {
+      const [targetMembership] = await conn.query(
+        'SELECT id FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
+        [grupId, penyetorId]
+      );
+      if (targetMembership.length === 0) {
+        await conn.rollback();
+        return res.status(400).json({ success: false, message: 'User target bukan anggota aktif dalam grup ini' });
+      }
+    }
 
     // Idempoten untuk sinkronisasi offline (US-04 / F10 id_klien)
     if (id_klien) {
@@ -102,7 +122,7 @@ router.post('/:grupId/contributions', requireAuth, async (req, res) => {
     const [result] = await conn.query(
       `INSERT INTO contributions (id_klien, id_grup, id_user, id_pencatat, nominal, keterangan, tanggal, status_data)
        VALUES (?, ?, ?, ?, ?, ?, ?, 'aktif')`,
-      [id_klien || null, grupId, penyetorId, userId, parsedNominal, keterangan || null, tgl]
+      [id_klien || null, grupId, penyetorId, userId, parsedNominal, keterangan ? String(keterangan).substring(0, 255) : null, tgl]
     );
 
     const contribId = result.insertId;
@@ -125,7 +145,8 @@ router.post('/:grupId/contributions', requireAuth, async (req, res) => {
     });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Contributions POST Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   } finally {
     conn.release();
   }
@@ -140,21 +161,24 @@ router.put('/:grupId/contributions/:id', requireAuth, async (req, res) => {
     const { nominal, keterangan, tanggal } = req.body;
 
     const parsedNominal = parseFloat(nominal);
-    if (isNaN(parsedNominal) || parsedNominal <= 0) {
-      return res.status(400).json({ success: false, message: 'Nominal setoran harus lebih dari 0' });
+    if (isNaN(parsedNominal) || !Number.isFinite(parsedNominal) || parsedNominal <= 0 || parsedNominal > 1000000000) {
+      return res.status(400).json({ success: false, message: 'Nominal setoran tidak valid' });
     }
 
     await conn.beginTransaction();
 
+    // Lock baris grup
+    await conn.query('SELECT id FROM `groups` WHERE id = ? FOR UPDATE', [grupId]);
+
     // Cek hak akses: hanya pencatat atau admin grup (US-15 Kriteria 3)
-    const [contribs] = await conn.query('SELECT * FROM contributions WHERE id = ? AND id_grup = ?', [id, grupId]);
+    const [contribs] = await conn.query('SELECT * FROM contributions WHERE id = ? AND id_grup = ? AND status_data = "aktif"', [id, grupId]);
     if (contribs.length === 0) {
       await conn.rollback();
       return res.status(404).json({ success: false, message: 'Data setoran tidak ditemukan' });
     }
 
     const [member] = await conn.query(
-      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ?',
+      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
       [grupId, userId]
     );
     const isAdmin = member.length > 0 && member[0].peran === 'admin';
@@ -169,7 +193,7 @@ router.put('/:grupId/contributions/:id', requireAuth, async (req, res) => {
       `UPDATE contributions 
        SET nominal = ?, keterangan = ?, tanggal = ? 
        WHERE id = ?`,
-      [parsedNominal, keterangan || null, tanggal || contribs[0].tanggal, id]
+      [parsedNominal, keterangan ? String(keterangan).substring(0, 255) : null, tanggal || contribs[0].tanggal, id]
     );
 
     // Hitung ulang saldo
@@ -180,7 +204,8 @@ router.put('/:grupId/contributions/:id', requireAuth, async (req, res) => {
     res.json({ success: true, message: 'Setoran berhasil diperbarui' });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Contributions PUT Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   } finally {
     conn.release();
   }
@@ -195,14 +220,17 @@ router.delete('/:grupId/contributions/:id', requireAuth, async (req, res) => {
 
     await conn.beginTransaction();
 
-    const [contribs] = await conn.query('SELECT * FROM contributions WHERE id = ? AND id_grup = ?', [id, grupId]);
+    // Lock baris grup
+    await conn.query('SELECT id FROM `groups` WHERE id = ? FOR UPDATE', [grupId]);
+
+    const [contribs] = await conn.query('SELECT * FROM contributions WHERE id = ? AND id_grup = ? AND status_data = "aktif"', [id, grupId]);
     if (contribs.length === 0) {
       await conn.rollback();
       return res.status(404).json({ success: false, message: 'Data setoran tidak ditemukan' });
     }
 
     const [member] = await conn.query(
-      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ?',
+      'SELECT peran FROM group_members WHERE id_grup = ? AND id_user = ? AND status = "aktif"',
       [grupId, userId]
     );
     const isAdmin = member.length > 0 && member[0].peran === 'admin';
@@ -223,7 +251,8 @@ router.delete('/:grupId/contributions/:id', requireAuth, async (req, res) => {
     res.json({ success: true, message: 'Setoran berhasil dihapus dan saldo dihitung ulang' });
   } catch (err) {
     await conn.rollback();
-    res.status(500).json({ success: false, message: err.message });
+    console.error('[Contributions DELETE Error]', err);
+    res.status(500).json({ success: false, message: 'Terjadi kesalahan pada server' });
   } finally {
     conn.release();
   }
