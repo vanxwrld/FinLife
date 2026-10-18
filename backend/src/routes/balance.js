@@ -1,6 +1,7 @@
 import express from 'express';
 import pool from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { isValidId } from '../services/validation.js';
 
 const router = express.Router();
 
@@ -8,6 +9,9 @@ const router = express.Router();
 router.get('/:grupId/balance', requireAuth, async (req, res) => {
   try {
     const { grupId } = req.params;
+    if (!isValidId(grupId)) {
+      return res.status(400).json({ success: false, message: 'ID grup tidak valid' });
+    }
     const userId = req.user.id;
 
     // Verifikasi keanggotaan
@@ -123,6 +127,9 @@ router.get('/:grupId/balance', requireAuth, async (req, res) => {
 router.get('/:grupId/transactions', requireAuth, async (req, res) => {
   try {
     const { grupId } = req.params;
+    if (!isValidId(grupId)) {
+      return res.status(400).json({ success: false, message: 'ID grup tidak valid' });
+    }
     const userId = req.user.id;
 
     // Verifikasi keanggotaan

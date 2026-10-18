@@ -1,38 +1,18 @@
 import express from 'express';
 import pool from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
+import { syncGroupBalance } from '../services/groupService.js';
+import { isValidId } from '../services/validation.js';
 
 const router = express.Router();
-
-/**
- * Helper: Recalculate dan update total_setoran, total_pengeluaran, dan saldo_grup di tabel `groups`
- */
-async function syncGroupBalance(conn, grupId) {
-  const [sumContrib] = await conn.query(
-    'SELECT COALESCE(SUM(nominal), 0) AS total FROM contributions WHERE id_grup = ? AND status_data = "aktif"',
-    [grupId]
-  );
-  const [sumExpense] = await conn.query(
-    'SELECT COALESCE(SUM(total_nominal), 0) AS total FROM expenses WHERE id_grup = ? AND status_data = "aktif"',
-    [grupId]
-  );
-
-  const totalSetoran = parseFloat(sumContrib[0].total);
-  const totalPengeluaran = parseFloat(sumExpense[0].total);
-  const saldoGrup = totalSetoran - totalPengeluaran;
-
-  await conn.query(
-    'UPDATE `groups` SET total_setoran = ?, total_pengeluaran = ?, saldo_grup = ? WHERE id = ?',
-    [totalSetoran, totalPengeluaran, saldoGrup, grupId]
-  );
-
-  return { totalSetoran, totalPengeluaran, saldoGrup };
-}
 
 // GET /api/groups/:grupId/contributions - Daftar setoran grup (US-04, US-14)
 router.get('/:grupId/contributions', requireAuth, async (req, res) => {
   try {
     const { grupId } = req.params;
+    if (!isValidId(grupId)) {
+      return res.status(400).json({ success: false, message: 'ID grup tidak valid' });
+    }
     const userId = req.user.id;
 
     // Verifikasi keanggotaan
@@ -68,6 +48,9 @@ router.post('/:grupId/contributions', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { grupId } = req.params;
+    if (!isValidId(grupId)) {
+      return res.status(400).json({ success: false, message: 'ID grup tidak valid' });
+    }
     const userId = req.user.id;
     const { id_user, nominal, keterangan, tanggal, id_klien } = req.body;
 
@@ -157,6 +140,9 @@ router.put('/:grupId/contributions/:id', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { grupId, id } = req.params;
+    if (!isValidId(grupId) || !isValidId(id)) {
+      return res.status(400).json({ success: false, message: 'ID grup atau ID setoran tidak valid' });
+    }
     const userId = req.user.id;
     const { nominal, keterangan, tanggal } = req.body;
 
@@ -216,6 +202,9 @@ router.delete('/:grupId/contributions/:id', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { grupId, id } = req.params;
+    if (!isValidId(grupId) || !isValidId(id)) {
+      return res.status(400).json({ success: false, message: 'ID grup atau ID setoran tidak valid' });
+    }
     const userId = req.user.id;
 
     await conn.beginTransaction();
@@ -258,5 +247,4 @@ router.delete('/:grupId/contributions/:id', requireAuth, async (req, res) => {
   }
 });
 
-export { syncGroupBalance };
 export default router;

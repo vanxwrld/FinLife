@@ -1,7 +1,8 @@
 import express from 'express';
 import pool from '../db.js';
 import { requireAuth } from '../middleware/auth.js';
-import { syncGroupBalance } from './contributions.js';
+import { syncGroupBalance } from '../services/groupService.js';
+import { isValidId } from '../services/validation.js';
 
 const router = express.Router();
 
@@ -9,6 +10,9 @@ const router = express.Router();
 router.get('/:grupId/expenses', requireAuth, async (req, res) => {
   try {
     const { grupId } = req.params;
+    if (!isValidId(grupId)) {
+      return res.status(400).json({ success: false, message: 'ID grup tidak valid' });
+    }
     const userId = req.user.id;
 
     // Verifikasi keanggotaan
@@ -73,6 +77,9 @@ router.post('/:grupId/expenses', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { grupId } = req.params;
+    if (!isValidId(grupId)) {
+      return res.status(400).json({ success: false, message: 'ID grup tidak valid' });
+    }
     const userId = req.user.id;
     const {
       id_klien,
@@ -243,6 +250,9 @@ router.delete('/:grupId/expenses/:id', requireAuth, async (req, res) => {
   const conn = await pool.getConnection();
   try {
     const { grupId, id } = req.params;
+    if (!isValidId(grupId) || !isValidId(id)) {
+      return res.status(400).json({ success: false, message: 'ID grup atau ID pengeluaran tidak valid' });
+    }
     const userId = req.user.id;
 
     await conn.beginTransaction();
