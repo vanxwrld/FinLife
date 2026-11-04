@@ -12,4 +12,11 @@ export const pool = mysql.createPool({
   dateStrings: ['DATE'],
 });
 
+export async function verifyConnection() {
+  const conn = await pool.getConnection();
+  conn.release();
+  console.log('[FinLife Backend] MySQL terhubung');
+}
+
 export default pool;
+
