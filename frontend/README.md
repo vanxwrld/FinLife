@@ -107,3 +107,5 @@ Cara uji dua akun di satu HP: daftar akun A → buat grup → catat setoran → 
 - Notifikasi: undangan, setoran/pengeluaran baru, dan pengingat tagihan dikirim ke akun tujuan (di perangkat yang sama).
 - Kode OTP reset kata sandi tetap `8241` (belum ada layanan email).
 - Mengosongkan semua data: hapus data Expo Go (Android: Pengaturan → Aplikasi → Expo Go → Hapus data).
+
+Frontend Expo: Aplikasi FinLife keseluruhan.
