@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "FinLife",
-    "slug": "FinLife",
+    "name": "finlife-app",
+    "slug": "finlife-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -19,9 +19,6 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    },
-    "plugins": [
-      "expo-status-bar"
-    ]
+    }
   }
 }
