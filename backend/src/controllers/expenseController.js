@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 import { syncGroupBalance } from '../services/groupService.js';
 import { isValidId } from '../services/validation.js';
+import { notifyGroupMembers } from '../services/notificationService.js';
 
 // GET /api/groups/:grupId/expenses - Daftar pengeluaran + split detail (US-05, US-14)
 export async function listExpenses(req, res) {
@@ -191,7 +192,7 @@ export async function createExpense(req, res) {
     const [expenseResult] = await conn.query(
       `INSERT INTO expenses (id_klien, id_grup, id_pembayar, id_pencatat, nama_pengeluaran, total_nominal, metode_pembagian, tanggal, status_data)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'aktif')`,
-      [id_klien || null, grupId, pembayarId, userId, nama_pengeluaran.trim().substring(0, 200), parsedNominal, metode_pembagian || 'bagi_rata', tgl]
+      [id_klien || null, grupId, pembayarId, userId, nama_pengeluaran.trim().substring(0, 150), parsedNominal, metode_pembagian || 'bagi_rata', tgl]
     );
 
     const expenseId = expenseResult.insertId;
@@ -208,6 +209,15 @@ export async function createExpense(req, res) {
     await syncGroupBalance(conn, grupId);
 
     await conn.commit();
+
+    // Kirim notifikasi ke anggota grup lain secara asynchronous
+    notifyGroupMembers(grupId, userId, {
+      title: 'Pengeluaran Dicatat',
+      body: `${req.user.nama || 'Anggota'} mencatat "${nama_pengeluaran.trim()}" Rp ${parsedNominal.toLocaleString('id-ID')}`,
+      jenis: 'transaksi',
+      referensiId: expenseId,
+      data: { tipe: 'pengeluaran', id: expenseId },
+    }).catch((e) => console.warn('[Push Notification] Pengeluaran error:', e.message));
 
     res.status(201).json({
       success: true,

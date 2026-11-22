@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import pool from '../config/db.js';
 import { isValidId } from '../services/validation.js';
+import { notifySingleUser } from '../services/notificationService.js';
 
 // GET /api/groups - List grup yang diikuti user (US-13)
 export async function listGroups(req, res) {
@@ -91,12 +92,27 @@ export async function getGroupDetail(req, res) {
     }
 
     const [members] = await pool.query(
-      `SELECT gm.id, gm.id_user, u.nama, u.username, u.email, gm.peran, gm.status, gm.tanggal_bergabung
+      `SELECT gm.id, gm.id_user, u.nama, u.username, u.email, gm.peran, gm.status, gm.tanggal_bergabung,
+              COALESCE(c.total_setoran, 0) AS total_setoran,
+              COALESCE(e.total_kewajiban, 0) AS total_kewajiban
        FROM group_members gm
        JOIN users u ON gm.id_user = u.id
+       LEFT JOIN (
+         SELECT id_user, SUM(nominal) AS total_setoran
+         FROM contributions
+         WHERE id_grup = ? AND status_data = 'aktif'
+         GROUP BY id_user
+       ) c ON c.id_user = gm.id_user
+       LEFT JOIN (
+         SELECT es.id_user, SUM(es.nominal_bagian) AS total_kewajiban
+         FROM expense_splits es
+         JOIN expenses exp ON es.id_pengeluaran = exp.id
+         WHERE exp.id_grup = ? AND exp.status_data = 'aktif'
+         GROUP BY es.id_user
+       ) e ON e.id_user = gm.id_user
        WHERE gm.id_grup = ? AND gm.status = 'aktif'
        ORDER BY gm.peran ASC, u.nama ASC`,
-      [grupId]
+      [grupId, grupId, grupId]
     );
 
     res.json({
@@ -203,6 +219,14 @@ export async function inviteMember(req, res) {
        VALUES (?, ?, ?, 'anggota', 'undangan', NOW())`,
       [grupId, targetUser.id, userId]
     );
+
+    // Kirim notifikasi personal ke user yang diundang
+    notifySingleUser(targetUser.id, grupId, {
+      title: 'Undangan Grup Baru',
+      body: `${req.user.nama || 'Seseorang'} mengundang kamu ke grup`,
+      jenis: 'undangan',
+      data: { grupId: Number(grupId) },
+    }).catch((e) => console.warn('[Push Notification] Invite error:', e.message));
 
     res.json({ success: true, message: `Undangan terkirim ke ${targetUser.nama}` });
   } catch (err) {

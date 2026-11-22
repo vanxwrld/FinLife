@@ -14,8 +14,19 @@ export const pool = mysql.createPool({
 
 export async function verifyConnection() {
   const conn = await pool.getConnection();
-  conn.release();
-  console.log('[FinLife Backend] MySQL terhubung');
+  try {
+    // Pastikan kolom push_token ada di tabel users
+    const [cols] = await conn.query("SHOW COLUMNS FROM `users` LIKE 'push_token'");
+    if (cols.length === 0) {
+      await conn.query("ALTER TABLE `users` ADD COLUMN `push_token` VARCHAR(255) NULL AFTER `password_hash`");
+      console.log('[FinLife Backend] Kolom push_token berhasil ditambahkan ke tabel users');
+    }
+    console.log('[FinLife Backend] MySQL terhubung');
+  } catch (err) {
+    console.warn('[FinLife Backend] Info kolom push_token:', err.message);
+  } finally {
+    conn.release();
+  }
 }
 
 export default pool;

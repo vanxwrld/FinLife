@@ -1,6 +1,7 @@
 import pool from '../config/db.js';
 import { syncGroupBalance } from '../services/groupService.js';
 import { isValidId } from '../services/validation.js';
+import { notifyGroupMembers } from '../services/notificationService.js';
 
 // GET /api/groups/:grupId/contributions - Daftar setoran grup (US-04, US-14)
 export async function listContributions(req, res) {
@@ -109,6 +110,15 @@ export async function createContribution(req, res) {
     await syncGroupBalance(conn, grupId);
 
     await conn.commit();
+
+    // Kirim notifikasi ke anggota grup lain secara asynchronous
+    notifyGroupMembers(grupId, userId, {
+      title: 'Setoran Dicatat',
+      body: `${req.user.nama || 'Anggota'} mencatat setoran Rp ${parsedNominal.toLocaleString('id-ID')}`,
+      jenis: 'transaksi',
+      referensiId: contribId,
+      data: { tipe: 'setoran', id: contribId },
+    }).catch((e) => console.warn('[Push Notification] Setoran error:', e.message));
 
     res.status(201).json({
       success: true,

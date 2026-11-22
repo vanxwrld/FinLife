@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "725652692388",
+    "project_id": "finlife-b3bb8",
+    "storage_bucket": "finlife-b3bb8.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:725652692388:android:22084c7fff73b646fa3531",
+        "android_client_info": {
+          "package_name": "com.finlife.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC4_1DxpMTkN2CvY29-BfDWzNqdvBZGJxU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
